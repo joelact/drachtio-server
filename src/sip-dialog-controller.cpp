@@ -1520,7 +1520,10 @@ namespace drachtio {
             }
             if (rip->shouldClearDialogOnResponse()) {
                 string dialogId = rip->getDialogId() ;
-                if( dialogId.length() > 0 ) {
+                if (sip->sip_cseq->cs_method == sip_method_bye && (sip->sip_status->st_status == 407 || sip->sip_status->st_status == 401)) {
+                    DR_LOG(log_debug) << "SipDialogController::processResponseInsideDialog: NOT clearing dialog after receiving 401/407 response to BYE"  ;
+                }
+                else if( dialogId.length() > 0 ) {
                     DR_LOG(log_debug) << "SipDialogController::processResponseInsideDialog: clearing dialog after receiving response to BYE or notify w/ subscription-state terminated"  ;
                     SD_Clear(m_dialogs, dialogId ) ;
                 }
@@ -2015,15 +2018,15 @@ namespace drachtio {
     // logging / metrics
     void SipDialogController::logStorageCount(bool bDetail)  {
 
-        DR_LOG(log_info) << "SipDialogController storage counts"  ;
-        DR_LOG(log_info) << "----------------------------------"  ;
+        DR_LOG(log_debug) << "SipDialogController storage counts"  ;
+        DR_LOG(log_debug) << "----------------------------------"  ;
         IIP_Log(m_invitesInProgress, bDetail);
         SD_Log(m_dialogs, bDetail);
 
         std::lock_guard<std::mutex> lock(m_mutex) ;
-        DR_LOG(log_info) << "m_mapTransactionId2Irq size:                                     " << m_mapTransactionId2Irq.size()  ;
-        DR_LOG(log_info) << "number of outgoing transactions held for timerD:                 " << m_timerDHandler.countTimerD()  ;
-        DR_LOG(log_info) << "number of outgoing transactions waiting for ACK from app:        " << m_timerDHandler.countPending()  ;
+        DR_LOG(log_debug) << "m_mapTransactionId2Irq size:                                     " << m_mapTransactionId2Irq.size()  ;
+        DR_LOG(log_debug) << "number of outgoing transactions held for timerD:                 " << m_timerDHandler.countTimerD()  ;
+        DR_LOG(log_debug) << "number of outgoing transactions waiting for ACK from app:        " << m_timerDHandler.countPending()  ;
         m_pTQM->logQueueSizes() ;
 
         // stats
