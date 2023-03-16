@@ -282,6 +282,13 @@ namespace drachtio {
 
     float m_minTlsVersion;
     bool m_bDisableNatDetection;
+
+    bool m_bAlwaysSend180;
+
+    bool m_bGloballyReadableLogs;
+    bool m_bTlsVerifyClientCert;
+
+    string  m_strUserAgentAutoAnswerOptions;
   } ;
 
 } ;

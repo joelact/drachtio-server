@@ -130,7 +130,9 @@ namespace drachtio {
     }
     void ClientController::leave( client_ptr client ) {
         m_clients.erase( client ) ;
-        DR_LOG(log_info) << "ClientController::leave - Removed client, count of connected clients is now: " << m_clients.size()  ;
+        time_t duration = client->getConnectionDuration();
+        DR_LOG(log_info) << "ClientController::leave - Removed client, connection duration " << std::dec << 
+            duration << " seconds, count of connected clients is now: " << m_clients.size()  ;
     }
     void ClientController::outboundFailed( const string& transactionId ) {
       string headers, body;
@@ -333,25 +335,21 @@ namespace drachtio {
     bool ClientController::route_request_inside_dialog( const string& rawSipMsg, const SipMsgData_t& meta, sip_t const *sip, 
         const string& transactionId, const string& dialogId ) {
         client_ptr client = this->findClientForDialog( dialogId );
+        string method_name = sip->sip_request->rq_method_name ;
+        bool isBye = 0 == method_name.compare("BYE");
+        bool isFinalNotifyForSubscribe = sip_method_notify == sip->sip_request->rq_method && 
+            NULL != sip->sip_subscription_state && 
+            NULL != sip->sip_subscription_state->ss_substate &&
+            NULL != strstr(sip->sip_subscription_state->ss_substate, "terminated") &&
+            (NULL == sip->sip_event || 
+                (sip->sip_event->o_type && !std::strstr(sip->sip_event->o_type, "refer") && !std::strstr(sip->sip_event->o_type, "REFER"))
+            );
+    
         if( !client ) {
             DR_LOG(log_warning) << "ClientController::route_request_inside_dialog - client managing dialog has disconnected: " << dialogId  ;
             
-            //TODO: try to find another client providing the same service
-
             // if this is a BYE from the network, it ends the dialog 
-            string method_name = sip->sip_request->rq_method_name ;
-            if( 0 == method_name.compare("BYE") || 
-                (sip_method_notify == sip->sip_request->rq_method && 
-                NULL != sip->sip_subscription_state && 
-                NULL != sip->sip_subscription_state->ss_substate &&
-                NULL != strstr(sip->sip_subscription_state->ss_substate, "terminated") &&
-                (NULL == sip->sip_event || 
-                    (sip->sip_event->o_type && 
-                    (0 != std::strcmp("refer", sip->sip_event->o_type) || 
-                    0 != std::strcmp("REFER", sip->sip_event->o_type))
-                    )
-                )
-            )) {
+            if( isBye || isFinalNotifyForSubscribe) {
                 removeDialog( dialogId ) ;
             }
             return false ;
@@ -362,19 +360,7 @@ namespace drachtio {
         m_ioservice.post( std::bind(fn, client, transactionId, dialogId, rawSipMsg, meta) ) ;
 
         // if this is a BYE from the network, it ends the dialog 
-        string method_name = sip->sip_request->rq_method_name ;
-        if( 0 == method_name.compare("BYE") || 
-            (sip_method_notify == sip->sip_request->rq_method && 
-            NULL != sip->sip_subscription_state && 
-            NULL != sip->sip_subscription_state->ss_substate &&
-            NULL != strstr(sip->sip_subscription_state->ss_substate, "terminated") &&
-            (NULL == sip->sip_event || 
-                (sip->sip_event->o_type && 
-                (0 != std::strcmp("refer", sip->sip_event->o_type) || 
-                0 != std::strcmp("REFER", sip->sip_event->o_type))
-                )
-            )
-        )) {
+        if( isBye || isFinalNotifyForSubscribe) {
             removeDialog( dialogId ) ;
         }
 
@@ -623,41 +609,41 @@ namespace drachtio {
     void ClientController::logStorageCount(bool bDetail) {
         std::lock_guard<std::mutex> lock(m_lock) ;
 
-        DR_LOG(log_debug) << "ClientController storage counts"  ;
-        DR_LOG(log_debug) << "----------------------------------"  ;
-        DR_LOG(log_debug) << "m_clients size:                                                  " << m_clients.size()  ;
-        DR_LOG(log_debug) << "m_services size:                                                 " << m_services.size()  ;
-        DR_LOG(log_debug) << "m_request_types size:                                            " << m_request_types.size()  ;
-        DR_LOG(log_debug) << "m_map_of_request_type_offsets size:                              " << m_map_of_request_type_offsets.size()  ;
-        DR_LOG(log_debug) << "m_mapDialogs size:                                               " << m_mapDialogs.size()  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "ClientController storage counts"  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "----------------------------------"  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "m_clients size:                                                  " << m_clients.size()  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "m_services size:                                                 " << m_services.size()  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "m_request_types size:                                            " << m_request_types.size()  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "m_map_of_request_type_offsets size:                              " << m_map_of_request_type_offsets.size()  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "m_mapDialogs size:                                               " << m_mapDialogs.size()  ;
         if (bDetail) {
             for (const auto& kv : m_mapDialogs) {
-                DR_LOG(log_debug) << "    dialog id: " << std::hex << (kv.first).c_str();
+                DR_LOG(bDetail ? log_info : log_debug) << "    dialog id: " << std::hex << (kv.first).c_str();
             }
         }
 
-        DR_LOG(log_debug) << "m_mapNetTransactions size:                                       " << m_mapNetTransactions.size()  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "m_mapNetTransactions size:                                       " << m_mapNetTransactions.size()  ;
         if (bDetail) {
             for (const auto& kv : m_mapNetTransactions) {
-                DR_LOG(log_info) << "    transaction id: " << std::hex << (kv.first).c_str();
+                DR_LOG(bDetail ? log_info : log_debug) << "    transaction id: " << std::hex << (kv.first).c_str();
             }
         }
-        DR_LOG(log_debug) << "m_mapAppTransactions size:                                       " << m_mapAppTransactions.size()  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "m_mapAppTransactions size:                                       " << m_mapAppTransactions.size()  ;
         if (bDetail) {
             for (const auto& kv : m_mapAppTransactions) {
-                DR_LOG(log_info) << "    transaction id: " << std::hex << (kv.first).c_str();
+                DR_LOG(bDetail ? log_info : log_debug) << "    transaction id: " << std::hex << (kv.first).c_str();
             }
         }
-        DR_LOG(log_debug) << "m_mapApiRequests size:                                           " << m_mapApiRequests.size()  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "m_mapApiRequests size:                                           " << m_mapApiRequests.size()  ;
         if (bDetail) {
             for (const auto& kv : m_mapApiRequests) {
-                DR_LOG(log_info) << "    client msg id: " << std::hex << (kv.first).c_str();
+                DR_LOG(bDetail ? log_info : log_debug) << "    client msg id: " << std::hex << (kv.first).c_str();
             }
         }
-        DR_LOG(log_debug) << "m_mapDialogId2Appname size:                                      " << m_mapDialogId2Appname.size()  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "m_mapDialogId2Appname size:                                      " << m_mapDialogId2Appname.size()  ;
         if (bDetail) {
             for (const auto& kv : m_mapDialogId2Appname) {
-                DR_LOG(log_debug) << "    dialog id: " << std::hex << (kv.first).c_str();
+                DR_LOG(bDetail ? log_info : log_debug) << "    dialog id: " << std::hex << (kv.first).c_str();
             }
         }
 

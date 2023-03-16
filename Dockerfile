@@ -1,15 +1,15 @@
-FROM debian:buster-slim
+FROM debian:bullseye-slim
 
 RUN apt-get update \
   && apt-get -y --quiet --force-yes upgrade \
-  && apt-get install -y --no-install-recommends ca-certificates gcc g++ make build-essential cmake git autoconf automake  curl libtool libtool-bin libssl-dev libcurl4-openssl-dev zlib1g-dev \
+  && apt-get install -y --no-install-recommends ca-certificates gcc g++ make build-essential cmake git autoconf automake  curl libtool libtool-bin libssl-dev libcurl4-openssl-dev zlib1g-dev libgoogle-perftools-dev \
   && git clone --depth=50 --branch=main https://github.com/drachtio/drachtio-server.git /usr/local/src/drachtio-server \
   && cd /usr/local/src/drachtio-server \
   && git submodule update --init --recursive \
   && ./bootstrap.sh \
   && mkdir /usr/local/src/drachtio-server/build  \
   && cd /usr/local/src/drachtio-server/build  \
-  && ../configure CPPFLAGS='-DNDEBUG' CXXFLAGS='-O2' \
+  && ../configure --enable-tcmalloc=yes CPPFLAGS='-DNDEBUG' CXXFLAGS='-O2' \
   && make \
   && make install \
   && apt-get purge -y --quiet --auto-remove gcc g++ make cmake build-essential git autoconf automake libtool libtool-bin \

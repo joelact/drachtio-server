@@ -14,11 +14,16 @@ An ansible role can be found [here](https://github.com/davehorton/ansible-role-d
 
 ## Building from source
 
-> Note: The build requires libcurl, which can be installed on debian as `sudo apt install libcurl4-openssl-dev`. All other third-party dependencies can be found under $(srcdir)/deps.  These include boost and the [sofia sip stack](https://github.com/davehorton/sofia-sip).  sofia is included as git submodules in this project.
+> Note: The build requires libcurl and tcmalloc.  These can can be installed on debian as follows
+```bash
+sudo apt install libcurl4-openssl-dev
+```
+ 
+All other third-party dependencies can be found under $(srcdir)/deps.  These include boost and the [sofia sip stack](https://github.com/davehorton/sofia-sip).  sofia is included as git submodules in this project.
 
 After installing libcurl, do as follows:
 ```
-git clone --depth=50 --branch=main git://github.com/davehorton/drachtio-server.git && cd drachtio-server
+git clone --depth=50 --branch=main https://github.com/drachtio/drachtio-server.git && cd drachtio-server
 git submodule update --init --recursive
 ./autogen.sh
 mkdir build && cd $_
@@ -26,16 +31,28 @@ mkdir build && cd $_
 make
 sudo make install
 ```
+### Building with tcmalloc
+If you want to build with [tcmalloc](https://google.github.io/tcmalloc/overview.html), which is a faster implementation of memory management, install libgoogle-perftools-dev and then adding a configure option:
+
+```bash
+sudo apt install libgoogle-perftools-dev
+```
+```bash
+# run autotools and create build directory as shown above
+../configure --enable-tcmalloc=yes CPPFLAGS='-DNDEBUG'
+```
 
 ## Platform support and dependencies
 
-drachtio-server has been most heavily deployed on debian jesse (8) but has undergone at least some level of testing on the following platforms:
-* Debian 8, 9, 10
+drachtio-server has been most heavily deployed on debian buster (10) but has undergone at least some level of testing on the following platforms:
+* Debian 8, 9, 10, 11
 * Centos 6.x
 * Ubuntu 10, 20
 * Fedora 20
 * Linux Mint
 * Mac OSX (10.9.2+)
+
+It can also be built on arm64 platforms.
 
 The following libraries are required to build:
 * gcc and c++ compilers

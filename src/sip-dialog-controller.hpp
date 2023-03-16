@@ -43,7 +43,7 @@ THE SOFTWARE.
 
 #define START_LEN (512)
 #define HDR_LEN (4192)
-#define BODY_LEN (8384)
+#define BODY_LEN (12288)
 
 namespace drachtio {
 
@@ -196,6 +196,8 @@ namespace drachtio {
 
     void notifyRefreshDialog( std::shared_ptr<SipDialog> dlg ) ;
     void notifyTerminateStaleDialog( std::shared_ptr<SipDialog> dlg, bool ackbye = false ) ;
+
+    void notifyCancelTimeoutReachedIIP( std::shared_ptr<IIP> dlg ) ;
 
 		void logStorageCount(bool bDetail = false)  ;
 

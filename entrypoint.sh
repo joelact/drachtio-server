@@ -61,6 +61,30 @@ if [ "$1" = 'drachtio' ]; then
     shift  
   done 
   
+  if [[ -n "$PUBLIC_IP" && -n "$WSS_PORT" ]]; then
+    MYARGS+=("--contact")
+    MYARGS+=("sips:${LOCAL_IP}:$WSS_PORT;transport=wss")
+    if [[ "$CLOUD" == "digitalocean" ]]; then
+      MYARGS+=("--contact")
+      MYARGS+=("sip:${PUBLIC_IP}:$WSS_PORT;transport=udp,tcp")
+    else
+      MYARGS+=("--external-ip")
+      MYARGS+=("${PUBLIC_IP}")
+    fi
+  fi
+
+  if [[ -n "$PUBLIC_IP" && -n "$TLS_PORT" ]]; then
+    MYARGS+=("--contact")
+    MYARGS+=("sips:${LOCAL_IP}:$TLS_PORT;transport=tls")
+    if [[ "$CLOUD" == "digitalocean" ]]; then
+      MYARGS+=("--contact")
+      MYARGS+=("sip:${PUBLIC_IP}:$TLS_PORT;transport=tls")
+    else
+      MYARGS+=("--external-ip")
+      MYARGS+=("${PUBLIC_IP}")
+    fi
+  fi
+
   exec drachtio "${MYARGS[@]}"
   
 fi

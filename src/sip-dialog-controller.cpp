@@ -177,7 +177,7 @@ namespace drachtio {
             dlg->getTransportDesc(transport) ;
             tags = makeTags( pData->getHeaders(), transport) ;
 
-            tport_t* tp = dlg->getTport() ; 
+            tport_t* tp = dlg->getTport() ; //DH: this does NOT take out a reference
             bool forceTport = NULL != tp ;  
 
             nta_leg_t *leg = const_cast<nta_leg_t *>(dlg->getNtaLeg());
@@ -189,6 +189,10 @@ namespace drachtio {
             const sip_contact_t *target ;
             if( (sip_method_ack == method || string::npos != requestUri.find("placeholder")) && nta_leg_get_route( leg, NULL, &target ) >=0 ) {
                 char buffer[256];
+
+                if (nullptr ==target) {
+                    throw std::runtime_error("unable to find route for dialog when sending ACK") ;
+                }
                 url_e( buffer, 255, target->m_url ) ;
                 requestUri = buffer ;
                 DR_LOG(log_debug) << "SipDialogController::doSendRequestInsideDialog - defaulting request uri to " << requestUri  ;
@@ -197,6 +201,8 @@ namespace drachtio {
                 std::shared_ptr<UaInvalidData> pData = m_pController->findTportForSubscription( target->m_url->url_user, target->m_url->url_host ) ;
                 if( NULL != pData ) {
                     DR_LOG(log_debug) << "SipDialogController::doSendRequestInsideDialog found cached tport for this client " << std::hex << (void *) pData->getTport();
+                    //DH: I am now holding a tport that I did not take out a reference for
+                    //what if while I am holding it the registration expires and the tport is destroyed?
                     if (pData->getTport() != tp) {
                         DR_LOG(log_info) << "SipDialogController::doSendRequestInsideDialog client has done a mid-call handoff; tp is now " << std::hex << (void *) pData->getTport();
                         tp = pData->getTport();
@@ -256,7 +262,7 @@ namespace drachtio {
                     else if (orq_tp) destroyOrq = true;
                     if (orq_tp) {
                         dlg->setTport(orq_tp) ;
-                        // tport reference will be release in SipDialog dtor
+                        tport_unref(orq_tp) ; // handed reference to dlg
                     }
                     else {
                         DR_LOG(log_debug) << "SipDialogController::doSendRequestInsideDialog - sending ACK but nta_outgoing_transport is null, delayed for DNS resolver";
@@ -525,7 +531,9 @@ namespace drachtio {
              }
 
             //prevent looping messages
-            normalizeSipUri( requestUri, 0 ) ;
+            if (!normalizeSipUri( requestUri, 0 )) {
+                throw std::runtime_error(string("invalid request-uri: ") + requestUri ) ;
+            }
             if( isLocalSipUri( requestUri ) ) {
                 throw std::runtime_error("can not send request to myself") ;
             }
@@ -993,7 +1001,7 @@ namespace drachtio {
                                     if( NULL != sipResponse->sip_contact && NULL != sipResponse->sip_contact->m_expires ) {
                                         expires = ::atoi( sipResponse->sip_contact->m_expires ) ;
                                     }
-                                    else if (NULL != sipResponse->sip_contact && sipResponse->sip_expires->ex_delta) {
+                                    else if (NULL != sipResponse->sip_expires && sipResponse->sip_expires->ex_delta) {
                                         expires = sipResponse->sip_expires->ex_delta;
                                     }  
                                 }
@@ -1497,26 +1505,49 @@ namespace drachtio {
         DR_LOG(log_debug) << "SipDialogController::processResponseInsideDialog: "  ;
     	ostringstream o ;
         std::shared_ptr<RIP> rip  ;
+        sip_method_t method = sip->sip_cseq->cs_method;
+        int statusCode = sip->sip_status->st_status ;
 
         if( findRIPByOrq( orq, rip ) ) {
-            DR_LOG(log_debug) << "SipDialogController::processResponseInsideDialog: found request for response"  ;
+            DR_LOG(log_debug) << "SipDialogController::processResponseInsideDialog: found request for "  << sip->sip_cseq->cs_method_name << " sip status " << statusCode ;
 
             string encodedMessage ;
             bool truncated ;
             msg_t* msg = nta_outgoing_getresponse(orq) ;  // adds a reference
             SipMsgData_t meta( msg, orq, "network") ;
-
             EncodeStackMessage( sip, encodedMessage ) ;
-            msg_destroy(msg) ;                             // releases reference
             
             m_pController->getClientController()->route_response_inside_transaction( encodedMessage, meta, orq, sip, rip->getTransactionId(), rip->getDialogId() ) ;            
 
-            tport_t *tp = nta_outgoing_transport(orq) ; 
-            if (sip->sip_cseq->cs_method == sip_method_invite && 
-                200 == sip->sip_status->st_status &&
-                tport_is_dgram(tp)) {
+            if (method == sip_method_invite && 200 == statusCode) {
+                tport_t *tp = nta_outgoing_transport(orq) ; // takes a ref on the tport..
                 // start a timerD for this successful reINVITE
-                m_timerDHandler.addInvite(orq);
+                if (tp) {
+                  if (tport_is_dgram(tp)) m_timerDHandler.addInvite(orq);
+                  tport_unref(tp);  // ..releases it
+                }
+                
+                /* reset session expires timer, if provided */
+                sip_session_expires_t* se = sip_session_expires(sip) ;
+                if( se ) {
+                    std::shared_ptr<SipDialog> dlg ;
+                    nta_leg_t* leg = nta_leg_by_call_id(m_pController->getAgent(), sip->sip_call_id->i_id);
+                    DR_LOG(log_debug) << "SipDialogController::processResponseInsideDialog: searching for dialog by leg " << std::hex << (void *) leg;
+                    if(leg && findDialogByLeg( leg, dlg )) {
+                        DR_LOG(log_debug) << "SipDialogController::processResponseInsideDialog: (re)setting session expires timer to " <<  se->x_delta;
+                        //TODO: if session-expires value is less than min-se ACK and then BYE with Reason header    
+                        dlg->setSessionTimer( se->x_delta, 
+                            !se->x_refresher || 0 == strcmp( se->x_refresher, "uac") ? 
+                                SipDialog::we_are_refresher : 
+                                SipDialog::they_are_refresher ) ;
+                    }
+                    else {
+                        DR_LOG(log_debug) << "SipDialogController::processResponseInsideDialog: unable to find dialog for leg " << std::hex << (void *) leg;
+                    }
+                }
+                else {
+                    DR_LOG(log_debug) << "SipDialogController::processResponseInsideDialog: no session expires header found";
+                }
             }
             if (rip->shouldClearDialogOnResponse()) {
                 string dialogId = rip->getDialogId() ;
@@ -1532,7 +1563,8 @@ namespace drachtio {
                     assert(false) ;
                 }
             }
-            clearRIP( orq ) ;          
+            clearRIP( orq ) ;     
+            msg_destroy(msg) ;   // releases reference
         }
         else {
             DR_LOG(log_error) << "SipDialogController::processResponseInsideDialog: unable to find request associated with response"  ;            
@@ -1767,6 +1799,12 @@ namespace drachtio {
         }
         SD_Clear(m_dialogs, dlg) ;
     }
+    void SipDialogController::notifyCancelTimeoutReachedIIP( std::shared_ptr<IIP> iip ) {
+        DR_LOG(log_info) << "SipDialogController::notifyCancelTimeoutReachedIIP - tearing down transaction id " << iip->getTransactionId() ;
+        m_pController->getClientController()->removeAppTransaction( iip->getTransactionId() ) ;
+        IIP_Clear(m_invitesInProgress, iip) ;
+    }
+
     void SipDialogController::bindIrq( nta_incoming_t* irq ) {
         nta_incoming_bind( irq, uasCancelOrAck, (nta_incoming_magic_t *) m_pController ) ;
     }
@@ -2018,15 +2056,15 @@ namespace drachtio {
     // logging / metrics
     void SipDialogController::logStorageCount(bool bDetail)  {
 
-        DR_LOG(log_debug) << "SipDialogController storage counts"  ;
-        DR_LOG(log_debug) << "----------------------------------"  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "SipDialogController storage counts"  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "----------------------------------"  ;
         IIP_Log(m_invitesInProgress, bDetail);
         SD_Log(m_dialogs, bDetail);
 
         std::lock_guard<std::mutex> lock(m_mutex) ;
-        DR_LOG(log_debug) << "m_mapTransactionId2Irq size:                                     " << m_mapTransactionId2Irq.size()  ;
-        DR_LOG(log_debug) << "number of outgoing transactions held for timerD:                 " << m_timerDHandler.countTimerD()  ;
-        DR_LOG(log_debug) << "number of outgoing transactions waiting for ACK from app:        " << m_timerDHandler.countPending()  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "m_mapTransactionId2Irq size:                                     " << m_mapTransactionId2Irq.size()  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "number of outgoing transactions held for timerD:                 " << m_timerDHandler.countTimerD()  ;
+        DR_LOG(bDetail ? log_info : log_debug) << "number of outgoing transactions waiting for ACK from app:        " << m_timerDHandler.countPending()  ;
         m_pTQM->logQueueSizes() ;
 
         // stats

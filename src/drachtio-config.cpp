@@ -129,9 +129,15 @@ namespace drachtio {
                 } catch( boost::property_tree::ptree_bad_path& e ) {
                 }
 
+                // user agent which if we see in an OPTIONS request, we respond 200 OK
+                try {
+                    pt.get_child("drachtio.sip.user-agent-options-auto-respond") ; // will throw if doesn't exist
+                    m_autoAnswerOptionsUserAgent = pt.get<string>("drachtio.sip.user-agent-options-auto-respond") ;
+                } catch( boost::property_tree::ptree_bad_path& e ) {
+                }
+
                 // redis blacklist server
                 try {
-                    cerr << "checking for blacklist in config" << endl;
                     pt.get_child("drachtio.sip.blacklist") ; // will throw if doesn't exist
                     m_redisAddress = pt.get<string>("drachtio.sip.blacklist.redis-address", "") ;
                     m_redisPort = pt.get<unsigned int>("drachtio.sip.blacklist.redis-port", 6379) ;
@@ -143,7 +149,6 @@ namespace drachtio {
                         m_redisAddress = "";
                     }
                 } catch( boost::property_tree::ptree_bad_path& e ) {
-                    cerr << "did not find blacklist at all" << endl;
                 }
                 
 
@@ -212,10 +217,10 @@ namespace drachtio {
                     m_logFileName = pt.get<string>("drachtio.logging.file.name") ;
                     m_logArchiveDirectory = pt.get<string>("drachtio.logging.file.archive", "archive") ;
                     m_rotationSize = pt.get<unsigned int>("drachtio.logging.file.size", 50) ; // default: 50M
-                    m_maxSize = pt.get<unsigned int>("drachtio.logging.file.maxSize", 0) ;
-                    m_minSize = pt.get<unsigned int>("drachtio.logging.file.minSize", 0) ;
-                    m_bAutoFlush = pt.get<bool>("drachtio.logging.file.auto-flush", false) ;
-                    m_maxFiles = pt.get<unsigned int>("drachtio.logging.file.maxFiles", 10);   // number of rotated files to keep
+                    m_maxSize = pt.get<unsigned int>("drachtio.logging.file.maxSize", 1000) ;    // default: 1G
+                    m_minSize = pt.get<unsigned int>("drachtio.logging.file.minSize", 0) ;      // default: no minimum
+                    m_bAutoFlush = pt.get<bool>("drachtio.logging.file.auto-flush", true) ;
+                    m_maxFiles = pt.get<unsigned int>("drachtio.logging.file.maxFiles", 100);   // number of rotated files to keep
                 } catch( boost::property_tree::ptree_bad_path& e ) {
                 }
 
@@ -303,6 +308,7 @@ namespace drachtio {
                 archiveDirectory = m_logArchiveDirectory ;
                 rotationSize = m_rotationSize ;
                 autoFlush = m_bAutoFlush;
+                maxSize = m_maxSize ;
                 maxFiles = m_maxFiles;
                 return true ;
             }
@@ -408,6 +414,12 @@ namespace drachtio {
             return true;
         }
 
+        bool getAutoAnswerOptionsUserAgent(string& userAgent) {
+            if (0 == m_autoAnswerOptionsUserAgent.length()) return false;
+            userAgent = m_autoAnswerOptionsUserAgent;
+            return true;
+        }
+
         unsigned int getMtu() {
             return m_mtu;
         }
@@ -495,6 +507,7 @@ namespace drachtio {
         unsigned int m_redisPort;
         string m_redisKey;
         unsigned int m_redisRefreshSecs;
+        string m_autoAnswerOptionsUserAgent;
   } ;
     
     /*
@@ -592,5 +605,10 @@ namespace drachtio {
     bool DrachtioConfig::getBlacklistServer(string& redisAddress, unsigned int& redisPort, string& redisKey, unsigned int& redisRefreshSecs) const {
         return m_pimpl->getBlacklistServer(redisAddress, redisPort, redisKey, redisRefreshSecs);
     }
+
+    bool DrachtioConfig::getAutoAnswerOptionsUserAgent(string& userAgent) const {
+        return m_pimpl->getAutoAnswerOptionsUserAgent(userAgent);
+    }
+
 
 }

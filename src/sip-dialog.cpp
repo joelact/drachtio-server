@@ -209,7 +209,6 @@ namespace drachtio {
 			nta_outgoing_destroy(m_orqAck);
 		}
 		if (m_orq) {
-			DR_LOG(log_debug) << "SipDialog::~SipDialog - destroying orq from original (uac) INVITE " << std::hex << (void *) m_orq ;
 			nta_outgoing_destroy(m_orq);
 		}
 	}
@@ -226,6 +225,7 @@ namespace drachtio {
 
   void SipDialog::setTport(tport_t* tp) {
 		if (m_tp) tport_unref(m_tp);
+    tport_ref( tp ) ;
     m_tp = tp ;
     const tp_name_t* tpn = tport_name( m_tp );
 
@@ -249,7 +249,7 @@ namespace drachtio {
 	}
 
 	void SipDialog::setSessionTimer( unsigned long nSecs, SessionRefresher_t whoIsResponsible ) {
-		assert( NULL == m_timerSessionRefresh ) ;
+		if (m_timerSessionRefresh) cancelSessionTimer();
 		m_refresher = whoIsResponsible ;
 		m_nSessionTimerDuration = nSecs * 1000  ;
 		m_nSessionExpiresSecs = nSecs ;

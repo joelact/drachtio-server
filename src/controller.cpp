@@ -68,6 +68,7 @@ THE SOFTWARE.
 #include <boost/log/sinks.hpp>
 #include <boost/log/sources/logger.hpp>
 #include <boost/algorithm/string/replace.hpp>
+#include <boost/filesystem.hpp>
 
 #if defined(__clang__)
     #pragma clang diagnostic pop
@@ -272,7 +273,7 @@ namespace drachtio {
         if( complete ) {
             m_os.flush() ;
             m_sipMessage = m_os.str() ;
-            m_sipMessage.resize( m_sipMessage.length() - 1) ;
+            if (m_sipMessage.length() > 1) m_sipMessage.resize( m_sipMessage.length() - 1) ;
             boost::replace_all(m_sipMessage, "\n", DR_CRLF);
         }
         else if( 0 == strcmp(szLine, "\n") ) {
@@ -290,7 +291,8 @@ namespace drachtio {
         m_current_severity_threshold(log_none), m_nSofiaLoglevel(-1), m_bIsOutbound(false), m_bConsoleLogging(false),
         m_nHomerPort(0), m_nHomerId(0), m_mtu(0), m_bAggressiveNatDetection(false), m_bMemoryDebug(false),
         m_nPrometheusPort(0), m_strPrometheusAddress("0.0.0.0"), m_tcpKeepaliveSecs(UINT16_MAX), m_bDumpMemory(false),
-        m_minTlsVersion(0), m_bDisableNatDetection(false), m_pBlacklist(nullptr) {
+        m_minTlsVersion(0), m_bDisableNatDetection(false), m_pBlacklist(nullptr), m_bAlwaysSend180(false), 
+        m_bGloballyReadableLogs(false), m_bTlsVerifyClientCert(false) {
 
         getEnv();
 
@@ -365,6 +367,33 @@ namespace drachtio {
                 DR_LOG(log_error) << "Error reading configuration file; no changes will be made.  Please correct the configuration file and try to reload again"  ;
                 m_ConfigNew.reset() ;
             }
+            else {
+                m_current_severity_threshold = m_ConfigNew->getLoglevel() ;
+                logging::core::get()->set_filter(
+                   expr::attr<severity_levels>("Severity") <= m_current_severity_threshold
+                );
+                switch (m_current_severity_threshold) {
+                    case log_notice:
+                        DR_LOG(log_notice) << "drachtio loglevel set to NOTICE"  ;
+                        break;
+                    case log_error:
+                        DR_LOG(log_notice) << "drachtio loglevel set to ERROR"  ;
+                        break;
+                    case log_info:
+                        DR_LOG(log_notice) << "drachtio loglevel set to INFO"  ;
+                        break;
+                    case log_debug:
+                        DR_LOG(log_notice) << "drachtio loglevel set to DEBUG"  ;
+                        break;
+                    default:
+                        break;
+                }
+                unsigned int sofiaLoglevel = m_ConfigNew->getSofiaLogLevel();
+                su_log_set_level(NULL, sofiaLoglevel);
+                DR_LOG(log_notice) << "sofia loglevel set to " <<  sofiaLoglevel;
+
+                this->installConfig() ;
+            }
         }
         else {
             DR_LOG(log_error) << "Ignoring signal; already have a new configuration file to install"  ;
@@ -425,6 +454,9 @@ namespace drachtio {
                 {"blacklist-redis-port", required_argument, 0, 'P'},
                 {"blacklist-redis-key", required_argument, 0, 'Q'},
                 {"blacklist-refresh-secs", required_argument, 0, 'R'},
+                {"always-send-180", no_argument, 0, 'S'},
+                {"user-agent-options-auto-respond", no_argument, 0, 'T'},
+                {"globally-readable-logs", no_argument, 0, 'U'},
                 {"version",    no_argument, 0, 'v'},
                 {0, 0, 0, 0}
             };
@@ -638,7 +670,15 @@ namespace drachtio {
                 case 'R':
                     m_redisRefreshSecs = ::atoi(optarg);
                     break;
-
+                case 'S':
+                    m_bAlwaysSend180 = true;
+                    break;
+                case 'T':
+                    m_strUserAgentAutoAnswerOptions = optarg;
+                    break;
+                case 'U':
+                    m_bGloballyReadableLogs = true;
+                    break;
                 case 'v':
                     cout << DRACHTIO_VERSION << endl ;
                     exit(0) ;
@@ -690,37 +730,38 @@ namespace drachtio {
         cerr << "Usage: drachtio [OPTIONS]" << endl ;
         cerr << endl << "Start drachtio sip engine" << endl << endl ;
         cerr << "Options:" << endl << endl ;
-        cerr << "    --address                      Bind to the specified address for application connections (default: 0.0.0.0)" << endl ;
-        cerr << "    --aggressive-nat-detection     take presence of 'nat=yes' in Record-Route or Contact hdr as an indicator a remote server is behind a NAT" << endl ;
-        cerr << "    --blacklist-redis-address      address of redis server that contains a set with blacklisted IPs" << endl;
-        cerr << "    --blacklist-redis-port         port for redis server containing blacklisted IPs" << endl;
-        cerr << "    --blacklist-redis-key          key for a redis set that contains blacklisted IPs" << endl;
-        cerr << "    --blacklist-redis-refresh-secs how often to check for new blacklisted IPs" << endl;
-        cerr << "    --daemon                       Run the process as a daemon background process" << endl ;
-        cerr << "    --cert-file                    TLS certificate file" << endl ;
-        cerr << "    --chain-file                   TLS certificate chain file" << endl ;
-        cerr << "-c, --contact                      Sip contact url to bind to (see /etc/drachtio.conf.xml for examples)" << endl ;
-        cerr << "    --dh-param                     file containing Diffie-Helman parameters, required when using encrypted TLS admin connections" << endl ;
-        cerr << "    --dns-name                     specifies a DNS name that resolves to the local host, if any" << endl ;
-        cerr << "-f, --file                         Path to configuration file (default /etc/drachtio.conf.xml)" << endl ;
-        cerr << "    --homer                        ip:port of homer/sipcapture agent" << endl ;
-        cerr << "    --homer-id                     homer agent id to use in HEP messages to identify this server" << endl ;
-        cerr << "    --http-handler                 http(s) URL to optionally send routing request to for new incoming sip request" << endl ;
-        cerr << "    --http-method                  method to use with http-handler: GET (default) or POST" << endl ;
-        cerr << "    --key-file                     TLS key file" << endl ;
-        cerr << "-l  --loglevel                     Log level (choices: notice, error, warning, info, debug)" << endl ;
-        cerr << "    --local-net                    CIDR for local subnet (e.g. \"10.132.0.0/20\")" << endl ;
-        cerr << "    --memory-debug                 enable verbose debugging of memory allocations (do not turn on in production)" << endl ;
-        cerr << "    --mtu                          max packet size for UDP (default: system-defined mtu)" << endl ;
-        cerr << "-p, --port                         TCP port to listen on for application connections (default 9022)" << endl ;
-        cerr << "    --prometheus-scrape-port       The port (or host:port) to listen on for Prometheus.io metrics scrapes" << endl ;
-        cerr << "    --secret                       The shared secret to use for authenticating application connections" << endl ;
-        cerr << "    --sofia-loglevel               Log level of internal sip stack (choices: 0-9)" << endl ;
-        cerr << "    --external-ip                  External IP address to use in SIP messaging" << endl ;
-        cerr << "    --stdout                       Log to standard output as well as any configured log destinations" << endl ;
-        cerr << "    --tcp-keepalive-interval       tcp keepalive in seconds (0=no keepalive)" << endl ;
-        cerr << "    --min-tls-version              minimum allowed TLS version for connecting clients (default: 1.0)" << endl ;
-        cerr << "-v  --version                      Print version and exit" << endl ;
+        cerr << "    --address                          Bind to the specified address for application connections (default: 0.0.0.0)" << endl ;
+        cerr << "    --aggressive-nat-detection         take presence of 'nat=yes' in Record-Route or Contact hdr as an indicator a remote server is behind a NAT" << endl ;
+        cerr << "    --blacklist-redis-address          address of redis server that contains a set with blacklisted IPs" << endl;
+        cerr << "    --blacklist-redis-port             port for redis server containing blacklisted IPs" << endl;
+        cerr << "    --blacklist-redis-key              key for a redis set that contains blacklisted IPs" << endl;
+        cerr << "    --blacklist-redis-refresh-secs     how often to check for new blacklisted IPs" << endl;
+        cerr << "    --daemon                           Run the process as a daemon background process" << endl ;
+        cerr << "    --cert-file                        TLS certificate file" << endl ;
+        cerr << "    --chain-file                       TLS certificate chain file" << endl ;
+        cerr << "-c, --contact                          Sip contact url to bind to (see /etc/drachtio.conf.xml for examples)" << endl ;
+        cerr << "    --dh-param                         file containing Diffie-Helman parameters, required when using encrypted TLS admin connections" << endl ;
+        cerr << "    --dns-name                         specifies a DNS name that resolves to the local host, if any" << endl ;
+        cerr << "-f, --file                             Path to configuration file (default /etc/drachtio.conf.xml)" << endl ;
+        cerr << "    --homer                            ip:port of homer/sipcapture agent" << endl ;
+        cerr << "    --homer-id                         homer agent id to use in HEP messages to identify this server" << endl ;
+        cerr << "    --http-handler                     http(s) URL to optionally send routing request to for new incoming sip request" << endl ;
+        cerr << "    --http-method                      method to use with http-handler: GET (default) or POST" << endl ;
+        cerr << "    --key-file                         TLS key file" << endl ;
+        cerr << "-l  --loglevel                         Log level (choices: notice, error, warning, info, debug)" << endl ;
+        cerr << "    --local-net                        CIDR for local subnet (e.g. \"10.132.0.0/20\")" << endl ;
+        cerr << "    --memory-debug                     enable verbose debugging of memory allocations (do not turn on in production)" << endl ;
+        cerr << "    --mtu                              max packet size for UDP (default: system-defined mtu)" << endl ;
+        cerr << "-p, --port                             TCP port to listen on for application connections (default 9022)" << endl ;
+        cerr << "    --prometheus-scrape-port           The port (or host:port) to listen on for Prometheus.io metrics scrapes" << endl ;
+        cerr << "    --secret                           The shared secret to use for authenticating application connections" << endl ;
+        cerr << "    --sofia-loglevel                   Log level of internal sip stack (choices: 0-9)" << endl ;
+        cerr << "    --external-ip                      External IP address to use in SIP messaging" << endl ;
+        cerr << "    --stdout                           Log to standard output as well as any configured log destinations" << endl ;
+        cerr << "    --tcp-keepalive-interval           tcp keepalive in seconds (0=no keepalive)" << endl ;
+        cerr << "    --min-tls-version                  minimum allowed TLS version for connecting clients (default: 1.0)" << endl ;
+        cerr << "    --user-agent-options-auto-respond  If we see this User-Agent header value in an OPTIONS request, automatically send 200 OK" << endl ;
+        cerr << "-v  --version                          Print version and exit" << endl ;
     }
     void DrachtioController::getEnv(void) {
         const char* p = std::getenv("DRACHTIO_ADMIN_ADDRESS");
@@ -741,6 +782,8 @@ namespace drachtio {
         if (p) m_tlsKeyFile = p;
         p = std::getenv("DRACHTIO_TLS_DH_PARAM_FILE");
         if (p) m_dhParam = p;
+        p = std::getenv("DRACHTIO_TLS_VERIFY_CLIENT_CERT");
+        if (p && ::atoi(p) == 1) m_bTlsVerifyClientCert = true;
         p = std::getenv("DRACHTIO_CONFIG_FILE_PATH");
         if (p) m_configFilename = p;
         p = std::getenv("DRACHTIO_HOMER_ADDRESS");
@@ -804,6 +847,10 @@ namespace drachtio {
         p = std::getenv("DRACHTIO_BLACKLIST_REDIS_REFRESH_SECS");
         if (p) {
             m_redisRefreshSecs = boost::lexical_cast<unsigned int>(p); ;
+        }
+        p = std::getenv("DRACHTIO_USER_AGENT_OPTIONS_AUTO_RESPOND");
+        if (p) {
+            m_strUserAgentAutoAnswerOptions = p;
         }
     }
 
@@ -938,6 +985,19 @@ namespace drachtio {
                 unsigned int rotationSize, maxSize, minSize, maxFiles ;
                 bool autoFlush ;
                 if( m_Config->getFileLogTarget( name, archiveDirectory, rotationSize, autoFlush, maxSize, minSize, maxFiles ) ) {
+                   if (!m_bGloballyReadableLogs) {
+                   boost::filesystem::path p(name);
+                    boost::filesystem::path dir = p.parent_path();
+                    boost::filesystem::create_directory(dir);
+                    std::ofstream output(name, ofstream::out | ofstream::app);
+                    output.close();
+                    boost::filesystem::permissions(name,
+                        boost::filesystem::perms::owner_read |
+                        boost::filesystem::perms::owner_write |
+                        boost::filesystem::perms::group_read |
+                        boost::filesystem::perms::group_write
+                    );
+                   }
 
                     m_sinkTextFile.reset(
                         new sinks::synchronous_sink< sinks::text_file_backend >(
@@ -977,7 +1037,7 @@ namespace drachtio {
 
         }
         catch (std::exception& e) {
-            std::cout << "FAILURE creating logger: " << e.what() << std::endl;
+            std::cerr << "FAILURE creating logger: " << e.what() << std::endl;
             throw e;
         }	
     }
@@ -1103,6 +1163,10 @@ namespace drachtio {
 
         }
 
+        if (m_strUserAgentAutoAnswerOptions.empty()) {
+             m_Config->getAutoAnswerOptionsUserAgent(m_strUserAgentAutoAnswerOptions);
+        }
+
         /* mostly useful for kubernetes deployments, where it is verboten to mess with iptables */
         if (m_redisAddress.empty()) {
             string redisAddress, redisKey;
@@ -1197,6 +1261,7 @@ namespace drachtio {
          stateless_callback,                            /* no callback function */
          this,                                      /* therefore no context */
          TAG_IF( !captureString.empty(), TPTAG_CAPT(captureString.c_str())),
+         TAG_IF( tlsTransport && hasTlsFiles && m_bTlsVerifyClientCert, TPTAG_TLS_VERIFY_PEER(true)),
          TAG_IF( tlsTransport && hasTlsFiles, TPTAG_TLS_CERTIFICATE_KEY_FILE(tlsKeyFile.c_str())),
          TAG_IF( tlsTransport && hasTlsFiles, TPTAG_TLS_CERTIFICATE_FILE(tlsCertFile.c_str())),
          TAG_IF( tlsTransport && hasTlsFiles && tlsChainFile.length() > 0, TPTAG_TLS_CERTIFICATE_CHAIN_FILE(tlsChainFile.c_str())),
@@ -1232,6 +1297,7 @@ namespace drachtio {
 
             rv = nta_agent_add_tport(m_nta, URL_STRING_MAKE(newUrl.c_str()),
                  TAG_IF( !captureString.empty(), TPTAG_CAPT(captureString.c_str())),
+                 TAG_IF( tlsTransport && hasTlsFiles && m_bTlsVerifyClientCert, TPTAG_TLS_VERIFY_PEER(true)),
                  TAG_IF( tlsTransport && hasTlsFiles, TPTAG_TLS_CERTIFICATE_KEY_FILE(tlsKeyFile.c_str())),
                  TAG_IF( tlsTransport && hasTlsFiles, TPTAG_TLS_CERTIFICATE_FILE(tlsCertFile.c_str())),
                  TAG_IF( tlsTransport && hasTlsFiles && !tlsChainFile.empty(), TPTAG_TLS_CERTIFICATE_CHAIN_FILE(tlsChainFile.c_str())),
@@ -1424,6 +1490,13 @@ namespace drachtio {
 
                         if( sip_method_invite == sip->sip_request->rq_method ) {
                             nta_msg_treply( m_nta, msg_ref_create( msg ), 100, NULL, TAG_END() ) ;  
+                            if (m_bAlwaysSend180) nta_msg_treply( m_nta, msg_ref_create( msg ), 180, NULL, TAG_END() ) ;  
+                        }
+                        if (sip_method_options == sip->sip_request->rq_method && sip->sip_user_agent && sip->sip_user_agent->g_string) {
+                            if (0 == m_strUserAgentAutoAnswerOptions.compare(sip->sip_user_agent->g_string)) {
+                                nta_msg_treply( m_nta, msg, 200, NULL, TAG_END() ) ;
+                                return -1 ;
+                            }
                         }
 
                         string transactionId ;
@@ -1665,7 +1738,8 @@ namespace drachtio {
         }
         else {
             std::shared_ptr<UaInvalidData> p = (ret.first)->second ;
-            DR_LOG(log_debug) << "DrachtioController::cacheTportForSubscription added "  << uri << ", expires: " << expires << ", count is now: " << m_mapUri2InvalidData.size();
+            DR_LOG(log_info) << "DrachtioController::cacheTportForSubscription added "  << uri << 
+                ", tport:" << (void *) tp << ", expires: " << expires << ", count is now: " << m_mapUri2InvalidData.size();
         }
     }
     void DrachtioController::flushTportForSubscription( const char* user, const char* host ) {
@@ -1680,7 +1754,7 @@ namespace drachtio {
         if( m_mapUri2InvalidData.end() != it ) {
             m_mapUri2InvalidData.erase( it ) ;
         }
-        DR_LOG(log_debug) << "DrachtioController::flushTportForSubscription "  << uri <<  ", count is now: " << m_mapUri2InvalidData.size();
+        DR_LOG(log_info) << "DrachtioController::flushTportForSubscription "  << uri <<  ", count is now: " << m_mapUri2InvalidData.size();
     }
     std::shared_ptr<UaInvalidData> DrachtioController::findTportForSubscription( const char* user, const char* host ) {
         std::shared_ptr<UaInvalidData> p ;
@@ -1698,7 +1772,7 @@ namespace drachtio {
             DR_LOG(log_debug) << "DrachtioController::findTportForSubscription: found transport for " << uri  ;
         }
         else {
-            DR_LOG(log_debug) << "DrachtioController::findTportForSubscription: no transport found for " << uri  ;
+            DR_LOG(log_info) << "DrachtioController::findTportForSubscription: no transport found for " << uri  ;
         }
         return p ;
     }
@@ -1943,6 +2017,8 @@ namespace drachtio {
   }
 
     void DrachtioController::printStats(bool bDetail) {
+       bool bMemoryDebug = m_bMemoryDebug || m_bDumpMemory;
+
        usize_t irq_hash = -1, orq_hash = -1, leg_hash = -1;
        usize_t irq_used = -1, orq_used = -1, leg_used = -1 ;
        usize_t recv_msg = -1, sent_msg = -1;
@@ -1992,10 +2068,10 @@ namespace drachtio {
                                 NTATAG_S_TOUT_RESPONSE_REF(tout_response),
                            TAG_END()) ;
        
-       DR_LOG(log_debug) << "size of hash table for server-side transactions                  " << dec << irq_hash  ;
-       DR_LOG(log_debug) << "size of hash table for client-side transactions                  " << orq_hash  ;
-       DR_LOG(log_debug) << "size of hash table for dialogs                                   " << leg_hash  ;
-       DR_LOG(log_debug) << "number of server-side transactions in the hash table             " << irq_used  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "size of hash table for server-side transactions                  " << dec << irq_hash  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "size of hash table for client-side transactions                  " << orq_hash  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "size of hash table for dialogs                                   " << leg_hash  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of server-side transactions in the hash table             " << irq_used  ;
        if (bDetail && irq_used > 0) {
            nta_incoming_t* irq = NULL;
            std::deque<nta_incoming_t*> aged;
@@ -2007,19 +2083,19 @@ namespace drachtio {
                    uint32_t seq = nta_incoming_cseq(irq);
                    sip_time_t secsSinceReceived = now - nta_incoming_received(irq, NULL);
                    if (secsSinceReceived > 3600) aged.push_back(irq);
-                   DR_LOG(log_debug) << "    nta_incoming_t*: " << std::hex << (void *) irq  <<
+                   DR_LOG(bMemoryDebug ? log_info : log_debug) << "    nta_incoming_t*: " << std::hex << (void *) irq  <<
                     " " << method << " " << std::dec << seq << " remote tag: " << tag << 
                     " alive " << secsSinceReceived << " secs";
                }
            } while (irq) ;
            /*
            std::for_each(aged.begin(), aged.end(), [](nta_incoming_t* irq) {
-               DR_LOG(log_debug) << "        destroying very old nta_incoming_t*: " <<  std::hex << (void *) irq ;
+               DR_LOG(bMemoryDebug ? log_info : log_debug) << "        destroying very old nta_incoming_t*: " <<  std::hex << (void *) irq ;
                nta_incoming_destroy(irq);
            });
            */
        }
-       DR_LOG(log_debug) << "number of client-side transactions in the hash table             " << orq_used  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of client-side transactions in the hash table             " << orq_used  ;
        if (bDetail && orq_used > 0) {
            nta_outgoing_t* orq = NULL;
            do {
@@ -2028,47 +2104,47 @@ namespace drachtio {
                    const char* method = nta_outgoing_method_name(orq);
                    const char* callId = nta_outgoing_call_id(orq);
                    uint32_t seq = nta_outgoing_cseq(orq);
-                   DR_LOG(log_debug) << "    nta_outgoing_t*: " << std::hex << (void *) orq  <<
+                   DR_LOG(bMemoryDebug ? log_info : log_debug) << "    nta_outgoing_t*: " << std::hex << (void *) orq  <<
                     " " << method << " " << callId << std::dec << " CSeq: " << seq;
                }
            } while (orq) ;
        }
-       DR_LOG(log_debug) << "number of dialogs in the hash table                              " << leg_used  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of dialogs in the hash table                              " << leg_used  ;
        if (bDetail && leg_used > 0) {
            nta_leg_t* leg = NULL;
            do {
                leg = nta_get_next_dialog_from_hash(m_nta, leg);
                if (leg) {
                    const char* localTag = nta_leg_get_tag(leg);
-                   DR_LOG(log_debug) << "    nta_leg_t*: " << std::hex << (void *) leg  << 
+                   DR_LOG(bMemoryDebug ? log_info : log_debug) << "    nta_leg_t*: " << std::hex << (void *) leg  << 
                     " local tag: " << localTag ;
                }
            } while (leg) ;
        }
-       DR_LOG(log_debug) << "number of sip messages received                                  " << recv_msg  ;
-       DR_LOG(log_debug) << "number of sip messages sent                                      " << sent_msg  ;
-       DR_LOG(log_debug) << "number of sip requests received                                  " << recv_request  ;
-       DR_LOG(log_debug) << "number of sip requests sent                                      " << sent_request  ;
-       DR_LOG(log_debug) << "number of bad sip messages received                              " << bad_message  ;
-       DR_LOG(log_debug) << "number of bad sip requests received                              " << bad_request  ;
-       DR_LOG(log_debug) << "number of bad sip requests dropped                               " << drop_request  ;
-       DR_LOG(log_debug) << "number of bad sip reponses dropped                               " << drop_response  ;
-       DR_LOG(log_debug) << "number of client transactions created                            " << client_tr  ;
-       DR_LOG(log_debug) << "number of server transactions created                            " << server_tr  ;
-       DR_LOG(log_debug) << "number of in-dialog server transactions created                  " << dialog_tr  ;
-       DR_LOG(log_debug) << "number of server transactions that have received ack             " << acked_tr  ;
-       DR_LOG(log_debug) << "number of server transactions that have received cancel          " << canceled_tr  ;
-       DR_LOG(log_debug) << "number of requests that were processed stateless                 " << trless_request  ;
-       DR_LOG(log_debug) << "number of requests converted to transactions by message callback " << trless_to_tr  ;
-       DR_LOG(log_debug) << "number of responses without matching request                     " << trless_response  ;
-       DR_LOG(log_debug) << "number of successful responses missing INVITE client transaction " << trless_200  ;
-       DR_LOG(log_debug) << "number of requests merged by UAS                                 " << merged_request  ;
-       DR_LOG(log_debug) << "number of SIP responses sent by stack                            " << sent_response  ;
-       DR_LOG(log_debug) << "number of SIP requests retransmitted by stack                    " << retry_request  ;
-       DR_LOG(log_debug) << "number of SIP responses retransmitted by stack                   " << retry_response  ;
-       DR_LOG(log_debug) << "number of retransmitted SIP requests received by stack           " << recv_retry  ;
-       DR_LOG(log_debug) << "number of SIP client transactions that has timeout               " << tout_request  ;
-       DR_LOG(log_debug) << "number of SIP server transactions that has timeout               " << tout_response  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of sip messages received                                  " << recv_msg  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of sip messages sent                                      " << sent_msg  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of sip requests received                                  " << recv_request  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of sip requests sent                                      " << sent_request  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of bad sip messages received                              " << bad_message  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of bad sip requests received                              " << bad_request  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of bad sip requests dropped                               " << drop_request  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of bad sip reponses dropped                               " << drop_response  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of client transactions created                            " << client_tr  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of server transactions created                            " << server_tr  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of in-dialog server transactions created                  " << dialog_tr  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of server transactions that have received ack             " << acked_tr  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of server transactions that have received cancel          " << canceled_tr  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of requests that were processed stateless                 " << trless_request  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of requests converted to transactions by message callback " << trless_to_tr  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of responses without matching request                     " << trless_response  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of successful responses missing INVITE client transaction " << trless_200  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of requests merged by UAS                                 " << merged_request  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of SIP responses sent by stack                            " << sent_response  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of SIP requests retransmitted by stack                    " << retry_request  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of SIP responses retransmitted by stack                   " << retry_response  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of retransmitted SIP requests received by stack           " << recv_retry  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of SIP client transactions that has timeout               " << tout_request  ;
+       DR_LOG(bMemoryDebug ? log_info : log_debug) << "number of SIP server transactions that has timeout               " << tout_response  ;
 
        STATS_GAUGE_SET(STATS_GAUGE_SOFIA_SERVER_HASH_SIZE, irq_hash)
        STATS_GAUGE_SET(STATS_GAUGE_SOFIA_CLIENT_HASH_SIZE, orq_hash)
@@ -2096,9 +2172,12 @@ namespace drachtio {
             std::shared_ptr<UaInvalidData> p = it->second ;
             if( p->isExpired() ) {
                 string uri  ;
+                tport_t* tp = p->getTport();
                 p->getUri(uri) ;
-                DR_LOG(log_debug) << "DrachtioController::processWatchdogTimer expiring transport for webrtc client: "  << uri << " " << (void *) p->getTport() ;
+
                 m_mapUri2InvalidData.erase(it++) ;
+                DR_LOG(log_info) << "DrachtioController::processWatchdogTimer expiring registration for webrtc client: "  << 
+                    uri << " " << (void *)tp << ", count is now " << m_mapUri2InvalidData.size()  ;
             }
             else {
                 ++it ;
@@ -2113,10 +2192,10 @@ namespace drachtio {
         m_pProxyController->logStorageCount(bMemoryDebug) ;
         m_bDumpMemory = false;
 
-        DR_LOG(log_debug) << "m_mapUri2InvalidData size:                                       " << m_mapUri2InvalidData.size()  ;
+        DR_LOG(bMemoryDebug ? log_info : log_debug) << "m_mapUri2InvalidData size:                                       " << m_mapUri2InvalidData.size()  ;
 
 #ifdef SOFIA_MSG_DEBUG_TRACE
-        DR_LOG(log_debug) << "number allocated msg_t                                           " << sofia_msg_count()  ;
+        DR_LOG(bMemoryDebug ? log_info : log_debug) << "number allocated msg_t                                           " << sofia_msg_count()  ;
 #endif
     }
 

@@ -92,7 +92,7 @@ namespace drachtio {
     BaseClient::BaseClient(ClientController& controller) :
         m_controller( controller ),  
         m_state(initial), m_buffer(12228), m_nMessageLength(0) {
-
+            time(&m_tConnect);
     }
     BaseClient::BaseClient(ClientController& controller, 
         const string& transactionId, 
@@ -100,7 +100,7 @@ namespace drachtio {
         m_controller( controller ), 
         m_transactionId(transactionId), m_host(host), m_port(port),
         m_state(initial), m_buffer(12228), m_nMessageLength(0) {
-
+            time(&m_tConnect);
     }
 
     BaseClient::~BaseClient() {
@@ -438,6 +438,10 @@ read_again:
         int len = utf8_strlen(str);
         ostringstream o ;
 
+        if (0 == len) {
+            DR_LOG(log_info) << "Client::send - we are unable to send this message back to client" << str; 
+            return;
+        }
         o << len << "#" << str ;
 
         m_msgToSend = o.str();
